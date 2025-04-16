@@ -18,10 +18,17 @@ fn main() {
         Ok (img) => {
             println!("image loaded successfully!");
             println!("Dimension: {}x{}", img.width(), img.height());
+
+            // save as png
+            img.save("output.png").unwrap();
         },
         Err(e) => {
             println!("Failed to load image: {:?}", e);
         }
         
+
+        
     }
+
+    
 }
