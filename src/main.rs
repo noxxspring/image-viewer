@@ -1,143 +1,114 @@
-use std::{io::Write, ops::Mul, os::linux::raw::stat, process::id};
+use std::f32::consts::PI;
 
-use image::{buffer, DynamicImage};
+use image::{Rgb, RgbImage};
 use minifb::{Key, Window, WindowOptions};
 
 
 
-struct ImageState {
-    image: DynamicImage,
-    rotation: i32,
-    scale: f32,
-    position: (i32, i32)
-}
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut state = ImageState {
-        image: image::open("bitcoin.png")?,
-        rotation: 0,
-        scale: 1.0,
-        position: (0, 0),
-    };
+fn main () -> Result<(), Box<dyn std::error::Error>> {
 
+    let size: usize = 256; // increased size for smoother curve
+    let mut img = RgbImage::new(size as u32, size as u32);
+
+
+    // fill with black background
+    for x in 0..size as u32 {
+        for y in 0..size as u32 {
+            img.put_pixel(x, y, Rgb([0, 0, 0]));
+        }
+    }
+
+
+    //Draw a solid circle 
+    for x in 0..size as u32 {
+        for y in 0..size as u32 {
+            let center_x = x as f32 - size as f32 / 2.0;
+            let center_y = y as f32 - size as f32 / 2.0;
+
+            // convert to polar coordinates
+            let r = (center_x.powi(2) + center_y.powi(2)).sqrt();
+            let mut theta = center_y.atan2(center_x);
+
+            //Normalize angle to 0-2m range
+            if theta < 0.0 {
+                theta += 2.0 * PI;
+            }
+
+            // Parameters for the circle shape
+            let arm_length = size as f32 * 0.4;
+            let center_width = size as f32 * 0.08;  // width at center
+            let edge_width = size as f32 * 0.25;  // width at edges
+
+            // calculate normalized angle to nearest arm
+            let normalized_arm = (theta * 4.0 / PI).round() * PI /4.0;
+
+            // calculate width at current radius
+            let width_at_r = if r < arm_length {
+                let t = r/ arm_length;
+
+                //Smooth interpolation between center and edge width 
+                center_width + (edge_width - center_width) * (t * t * (3.0 - 2.0 * t))
+            }else{
+                0.0
+            };
+
+            //check if point is present
+            let angle_diff = (theta - normalized_arm).abs();
+            if r < arm_length && angle_diff < width_at_r / r {
+                img.put_pixel(x, y, Rgb([225, 0, 0]));
+            }
+        }
+    }
+
+    // create window with scaling for better visibility
+    let scale: usize = 2;
+    let window_size: usize = size * scale;
     let mut window = Window::new(
-        "Enhanced Image Viewer",
-         800,
-         600,
-         WindowOptions {
+        "Solid Circle", 
+        window_size, 
+        window_size,
+        WindowOptions {
             resize: true,
             scale: minifb::Scale::X1,
             scale_mode: minifb::ScaleMode::AspectRatioStretch,
             ..WindowOptions::default()
-         },
-        )?;
+        },
+    )?;
 
 
-        window.limit_update_rate(Some(std::time::Duration::from_micros(16600)));
-        let mut buffer: Vec<u32> = vec![0; 800 * 600];
+    // create scaled buffer
+    let mut buffer = vec![0u32; window_size * window_size];
 
-        println!("\n=== Enhanced Image Viewer ===");
-        println!("Controls:");
-        println!("← → Arrow keys - Rotate image");
-        println!("+ - Keys - Zoom in/out");
-        println!("IJKL - Pan image (I=up, J=left, K=down, L=right)");
-        println!("R - Reset view");
-        println!("Space - Save current state");
-        println!("Q - Quit");
+    // Scale and convert image to window buffer
+    for (i , pixel) in img.pixels().enumerate(){
+        let img_x = (i as usize % size) * scale;
+        let img_y = (i as usize / size) * scale;
 
-
-        while window.is_open() && !window.is_key_down(Key::Q) {
-            // Rotation
-            if window.is_key_pressed(Key::Right, minifb::KeyRepeat::No) {
-                state.rotation = (state.rotation + 90) % 360;
-            }
-
-            if window.is_key_pressed(Key::Left, minifb::KeyRepeat::No){
-                state.rotation = (state.rotation - 90 + 360) % 360;
-            }
-
-            //panning with IJKL
-            if window.is_key_down(Key::I) {state.position.1 -= 5; }
-            if window.is_key_down(Key::K) {state.position.1 += 5; }
-            if window.is_key_down(Key::J) {state.position.0 -= 5; }
-            if window.is_key_down(Key::L) {state.position.0 += 5; }
-
-
-            // Zooming
-            if window.is_key_down(Key::Equal) {
-                state.scale *= 1.1;
-            }
-
-            if window.is_key_down(Key::Minus) {
-                state.scale /= 1.1;
-            }
-
-            // Reset
-            if window.is_key_pressed(Key::Space, minifb::KeyRepeat::No) {
-                let filename = format!("image_rot{}_scale{}.png",
-                    state.rotation,
-                (state.scale * 100.0) as i32 );
-                state.image.save(&filename)?;
-                println!("Saved as: {}", filename)
-            }
-
-
-            update_buffer(&state, &mut buffer, 800, 600);
-            window.update_with_buffer(&buffer, 800, 600)?;
-
-            //Display current state
-            print!("\rRotation: {}° | Zoom: {:.1}x | Position: {:?}  ",
-            state.rotation, state.scale, state.position);
-            std::io::stdout().flush()?;
-               
-            }
-            Ok(())
-            
-        }
-
-        fn update_buffer(state: &ImageState, buffer: &mut Vec<u32>, width: usize, height: usize) {
-            buffer.fill(0);  // clear with black background
-
-            let scaled_width = (width as f32 * state.scale) as u32;
-            let scaled_height = (height as f32 * state.scale) as u32;
-
-            let mut processed_img = state.image.clone();
-
-            //Apply transformation
-            match state.rotation {
-                90 => processed_img = processed_img.rotate90(),
-                180 => processed_img = processed_img.rotate180(),
-                270 => processed_img = processed_img.rotate270(),
-                _=> {}
-    
-            }
-
-            let resized = processed_img.resize(
-                scaled_width,
-                scaled_height,
-                image::imageops::FilterType::Triangle);
-
-                let rgba = resized.to_rgba8();
-
-                //apply position offset when copying to buffer
-                for y in 0..height {
-                    for x in 0..width{
-                        let src_x = x as i32 - state.position.0;
-                        let src_y = y as i32 - state.position.1;
-
-
-                        if src_x >= 0 && src_x < rgba.width() as i32 && 
-                        src_y >= 0 && src_y < rgba.height() as i32 {
-                            let pixel = rgba.get_pixel(src_x as u32, src_y as u32);
-                            let idx = y * width + x;
-                            if idx < buffer.len() {
-                                buffer[idx] = (pixel[3] as u32) << 24 |
-                                (pixel[0] as u32 )<< 16 | 
-                                (pixel[1] as u32) << 8 |
-                                (pixel[2] as u32)
-                            }
-                        }
-                    }
+        for dy in 0..scale {
+            for dx in 0..scale {
+                let buf_idx = (img_y + dy) * window_size + (img_x + dx);
+                if buf_idx < buffer.len() {
+                    buffer[buf_idx] = 
+                    (0xFF << 24) | // Alpha
+                    (pixel[0] as u32) << 16 | 
+                    (pixel[1] as u32) << 8 |
+                    (pixel[2] as u32);
                 }
-            
+            }
         }
+    } 
+
+    // Save image
+    img.save("solid_circle.png")?;
+
+    // Display image until closed 
+    println!("Press ESC to exit");
+    println!("Image saved as solid_cirle.png");
+
+    while window.is_open() && !window.is_key_down(Key::Escape) {
+        window.update_with_buffer(&buffer, window_size, window_size)?;
+    }
+
+    Ok(())
+}
